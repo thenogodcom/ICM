@@ -17,7 +17,7 @@ curl -sSL https://raw.githubusercontent.com/thenogodcom/ICM/main/install-watchdo
 bash /root/strict-watchdog.sh
 ```
 
-編輯延遲觸發條件，默認500ms
+編輯延遲觸發條件，默認10ms
 
 ```bash
 nano /etc/strict-watchdog.conf
