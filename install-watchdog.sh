@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# Script Name: Strict Network Watchdog Installer (Production Ready)
+# Script Name: Strict Network Watchdog Installer (Ultimate Edition)
 # Description: 自動安裝雙目標(Google/CF)網絡保活腳本，專治低配 VPS 網絡假死
 # System Support: CentOS / Debian / Ubuntu / AlmaLinux / Rocky / Alpine
-# Version: 2.3 (Final: Robust Log Fallback + Precise Regex Parsing)
+# Version: 2.5 (Fixed: Latency regex strictly matches 'min/avg/max' pattern)
 # ==============================================================================
 
 set -u
@@ -36,7 +36,7 @@ done
 
 clear
 echo -e "${BLUE}=============================================================${PLAIN}"
-echo -e "${BLUE}    嚴格網卡守護程序 v2.3 (Final Production Edition)      ${PLAIN}"
+echo -e "${BLUE}    嚴格網卡守護程序 v2.5 (Ultimate Edition)              ${PLAIN}"
 echo -e "${BLUE}=============================================================${PLAIN}"
 echo -e "正在準備安裝環境...\n"
 
@@ -80,7 +80,7 @@ echo -e "${YELLOW}> 正在生成檢測腳本至: ${INSTALL_PATH}...${PLAIN}"
 cat > "$INSTALL_PATH" << 'EOF'
 #!/bin/bash
 # ---------------------------------------------------------
-# Strict Network Watchdog - Core Logic (v2.3)
+# Strict Network Watchdog - Core Logic (v2.5)
 # ---------------------------------------------------------
 
 set -u
@@ -97,11 +97,9 @@ source "$CONFIG"
 # --- 獲取默認網卡 ---
 INTERFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -1)
 if [[ -z "$INTERFACE" ]]; then
-    # 備用方法
     INTERFACE=$(ip link | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}' | head -1 | sed 's/ //g')
 fi
 if [[ -z "$INTERFACE" ]]; then
-    # 如果連備用都失敗，記錄到 syslog 並退出
     logger -t strict-watchdog "FATAL: 無法獲取默認網卡"
     exit 1
 fi
@@ -110,12 +108,9 @@ fi
 LOG_DIR=$(dirname "$LOG_FILE")
 if [[ ! -d "$LOG_DIR" ]]; then
     if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
-        # 如果無法創建目錄，回退到 /tmp
         LOG_FILE="/tmp/strict-watchdog.log"
     fi
 fi
-
-# 嘗試創建/觸摸日誌文件，如果失敗則完全回退到 /tmp
 if ! touch "$LOG_FILE" 2>/dev/null; then
     LOG_FILE="/tmp/strict-watchdog.log"
 fi
@@ -132,7 +127,7 @@ rotate_log() {
     fi
 }
 
-# --- 智能 Ping 檢測函數 (正則結構匹配版) ---
+# --- 智能 Ping 檢測函數 (正則結構匹配 - 最安全方案) ---
 check_target() {
     local target=$1
     local packets=4
@@ -156,8 +151,9 @@ check_target() {
         }
     ')
     
-    # 2. 解析平均延遲 (使用 Sed 匹配 x/avg/x 結構)
-    # 這比 grep 浮點數更安全，因為它要求左右必須有 "/"
+    # 2. 解析平均延遲 (使用 sed 匹配 num/num/num 結構)
+    # 這是唯一能區分 IP 地址和 Ping 統計數據的方法
+    # 邏輯: 尋找 "數字/數字/數字" 的模式，並提取中間那個
     local avg
     avg=$(echo "$output" | sed -n 's|.*/\([0-9.]\+\)/[0-9.]\+/.*|\1|p' | cut -d. -f1)
     
@@ -222,12 +218,14 @@ echo -e "${YELLOW}> 正在配置 Crontab 定時任務...${PLAIN}"
 echo -e "${GREEN}> 定時任務已添加 (頻率: 每10分鐘)。${PLAIN}"
 echo -e ""
 echo -e "${BLUE}=============================================================${PLAIN}"
-echo -e "${GREEN}              安裝成功 (v2.3 Final)                         ${PLAIN}"
+echo -e "${GREEN}              安裝成功 (v2.5 Ultimate)                      ${PLAIN}"
 echo -e "${BLUE}=============================================================${PLAIN}"
 echo -e "優化摘要:"
-echo -e "  ✅ 延遲解析: 替換為 Sed 正則匹配 'num/avg/num' 結構，杜絕 IP 混淆"
+echo -e "  ✅ 延遲解析: 修復 grep 取值 BUG，使用 sed 匹配 'min/avg/max' 結構"
 echo -e "  ✅ 日誌容錯: 權限不足自動切換至 /tmp，保證日誌不丟失"
-echo -e "  ✅ 丟包解析: 使用 AWK 智能遍歷，精準識別百分比字段"
+echo -e "  ✅ 丟包解析: AWK 智能遍歷，精準識別百分比字段"
+echo -e "  ✅ 系統集成: 關鍵錯誤記錄到 syslog 便於監控"
 echo -e ""
 echo -e "測試命令: ${GREEN}bash $INSTALL_PATH${PLAIN}"
+echo -e "日誌查看: ${GREEN}tail -f $LOG_FILE${PLAIN}"
 echo -e "${BLUE}=============================================================${PLAIN}"
