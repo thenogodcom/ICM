@@ -56,7 +56,7 @@ TARGET2="1.1.1.1"          # Cloudflare DNS
 PACKET_LOSS_THRESHOLD=50
 
 # 觸發重啟的延遲閾值 (毫秒)
-MAX_LATENCY=500
+MAX_LATENCY=10
 
 # 日誌文件路徑
 LOG_FILE="/var/log/strict-watchdog/watchdog.log"
