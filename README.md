@@ -29,6 +29,12 @@ nano /etc/strict-watchdog.conf
 cat /var/log/strict-watchdog/watchdog.log
 ```
 
+清空網卡重啓記錄
+
+```bash
+> /var/log/strict-watchdog/watchdog.log
+```
+
 查看腳本執行記錄
 
 ```bash
