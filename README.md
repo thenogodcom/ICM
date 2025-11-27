@@ -18,3 +18,15 @@ bash /root/strict-watchdog.sh
 ```
 
 即可隨時啟動管理介面。
+
+編輯延遲觸發條件，默認500ms
+
+```bash
+nano /etc/strict-watchdog.conf
+```
+
+查看網卡重啓記錄
+
+```bash
+cat /var/log/strict-watchdog/watchdog.log
+```
