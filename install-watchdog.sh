@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# Script Name: Strict Network Watchdog Installer (Ultimate Edition)
-# Description: 自動安裝雙目標(Google/CF)網絡保活腳本，專治低配 VPS 網絡假死
+# Script Name: Strict Network Watchdog Installer (Safe Reboot Edition)
+# Description: 自動安裝雙目標(Google/CF)網絡保活腳本，使用系統服務重啟網絡，防止失聯
 # System Support: CentOS / Debian / Ubuntu / AlmaLinux / Rocky / Alpine
-# Version: 2.5 (Fixed: Latency regex strictly matches 'min/avg/max' pattern)
+# Version: 2.6 (Fixed: Replaced 'ip link' with system service restart for safety)
 # ==============================================================================
 
 set -u
@@ -36,7 +36,7 @@ done
 
 clear
 echo -e "${BLUE}=============================================================${PLAIN}"
-echo -e "${BLUE}    嚴格網卡守護程序 v2.5 (Ultimate Edition)              ${PLAIN}"
+echo -e "${BLUE}    嚴格網卡守護程序 v2.6 (Safe Reboot Edition)           ${PLAIN}"
 echo -e "${BLUE}=============================================================${PLAIN}"
 echo -e "正在準備安裝環境...\n"
 
@@ -58,9 +58,6 @@ PACKET_LOSS_THRESHOLD=50
 # 觸發重啟的延遲閾值 (毫秒)
 MAX_LATENCY=500
 
-# 網卡重啟等待時間 (秒)
-RESTART_WAIT=3
-
 # 日誌文件路徑
 LOG_FILE="/var/log/strict-watchdog/watchdog.log"
 
@@ -80,7 +77,7 @@ echo -e "${YELLOW}> 正在生成檢測腳本至: ${INSTALL_PATH}...${PLAIN}"
 cat > "$INSTALL_PATH" << 'EOF'
 #!/bin/bash
 # ---------------------------------------------------------
-# Strict Network Watchdog - Core Logic (v2.5)
+# Strict Network Watchdog - Core Logic (v2.6)
 # ---------------------------------------------------------
 
 set -u
@@ -94,17 +91,11 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 source "$CONFIG"
 
-# --- 獲取默認網卡 ---
+# --- 獲取默認網卡 (僅用於記錄日誌，不依賴它重啟) ---
 INTERFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -1)
-if [[ -z "$INTERFACE" ]]; then
-    INTERFACE=$(ip link | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;getline}' | head -1 | sed 's/ //g')
-fi
-if [[ -z "$INTERFACE" ]]; then
-    logger -t strict-watchdog "FATAL: 無法獲取默認網卡"
-    exit 1
-fi
+[[ -z "$INTERFACE" ]] && INTERFACE="unknown"
 
-# --- 日誌環境初始化 (帶 Fallback 機制) ---
+# --- 日誌環境初始化 ---
 LOG_DIR=$(dirname "$LOG_FILE")
 if [[ ! -d "$LOG_DIR" ]]; then
     if ! mkdir -p "$LOG_DIR" 2>/dev/null; then
@@ -127,17 +118,16 @@ rotate_log() {
     fi
 }
 
-# --- 智能 Ping 檢測函數 (正則結構匹配 - 最安全方案) ---
+# --- 智能 Ping 檢測函數 (v2.5 正則版) ---
 check_target() {
     local target=$1
     local packets=4
     local timeout=2
     
-    # 執行 ping (忽略錯誤碼)
     local output
     output=$(ping -c $packets -W $timeout "$target" 2>&1 || true)
     
-    # 1. 解析丟包率 (Awk 遍歷字段查找百分比)
+    # 解析丟包率
     local loss
     loss=$(echo "$output" | awk '
         /packets transmitted/ {
@@ -151,17 +141,59 @@ check_target() {
         }
     ')
     
-    # 2. 解析平均延遲 (使用 sed 匹配 num/num/num 結構)
-    # 這是唯一能區分 IP 地址和 Ping 統計數據的方法
-    # 邏輯: 尋找 "數字/數字/數字" 的模式，並提取中間那個
+    # 解析平均延遲 (sed 匹配結構)
     local avg
     avg=$(echo "$output" | sed -n 's|.*/\([0-9.]\+\)/[0-9.]\+/.*|\1|p' | cut -d. -f1)
     
-    # 兜底
     [[ -z "$loss" ]] && loss=100
     [[ -z "$avg" ]] && avg=9999
     
     echo "${loss},${avg}"
+}
+
+# --- 安全網絡重啟函數 (Systemd/Service 兼容) ---
+restart_network_safely() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] 正在重啟網絡服務..." >> "$LOG_FILE"
+    
+    # 嘗試檢測系統類型並重啟服務
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-units --full -all | grep -q "networking.service"; then
+            systemctl restart networking
+        elif systemctl list-units --full -all | grep -q "network.service"; then
+            systemctl restart network
+        elif systemctl list-units --full -all | grep -q "NetworkManager.service"; then
+            systemctl restart NetworkManager
+        else
+            # 保底：如果找不到服務，才使用 ip link (帶 DHCP 刷新)
+            echo "[WARN] 未找到 systemd 網絡服務，使用 ip link + dhclient 保底..." >> "$LOG_FILE"
+            ip link set dev "$INTERFACE" down
+            sleep 3
+            ip link set dev "$INTERFACE" up
+            sleep 5
+            dhclient "$INTERFACE" 2>/dev/null || true
+        fi
+    else
+        # 非 systemd 系統 (如 Alpine/OpenRC)
+        if [ -f /etc/init.d/networking ]; then
+            /etc/init.d/networking restart
+        elif [ -f /etc/init.d/network ]; then
+            /etc/init.d/network restart
+        else
+            # 最後的無奈
+            ip link set dev "$INTERFACE" down
+            sleep 3
+            ip link set dev "$INTERFACE" up
+            dhclient "$INTERFACE" 2>/dev/null || true
+        fi
+    fi
+    
+    # 檢查結果
+    sleep 2
+    if ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 網絡重啟成功，連接已恢復。" >> "$LOG_FILE"
+    else
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] 網絡重啟後仍無法連接互聯網！" >> "$LOG_FILE"
+    fi
 }
 
 # --- 主邏輯 ---
@@ -178,7 +210,6 @@ latency2=${result2##*,}
 RESTART_NEEDED=0
 REASON=""
 
-# 判斷邏輯
 if [[ $loss1 -ge $PACKET_LOSS_THRESHOLD ]] && [[ $loss2 -ge $PACKET_LOSS_THRESHOLD ]]; then
     RESTART_NEEDED=1
     REASON="嚴重丟包 (G:${loss1}%, C:${loss2}% >= ${PACKET_LOSS_THRESHOLD}%)"
@@ -187,7 +218,6 @@ elif [[ $latency1 -gt $MAX_LATENCY ]] && [[ $latency2 -gt $MAX_LATENCY ]]; then
     REASON="嚴重延遲 (G:${latency1}ms, C:${latency2}ms > ${MAX_LATENCY}ms)"
 fi
 
-# 執行重啟
 if [[ $RESTART_NEEDED -eq 1 ]]; then
     {
         echo "------------------------------------------------"
@@ -196,14 +226,8 @@ if [[ $RESTART_NEEDED -eq 1 ]]; then
         echo "  網卡: $INTERFACE"
     } >> "$LOG_FILE"
     
-    ip link set dev "$INTERFACE" down 2>/dev/null
-    sleep "$RESTART_WAIT"
-    if ip link set dev "$INTERFACE" up 2>/dev/null; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 重啟成功" >> "$LOG_FILE"
-    else
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [FATAL] 重啟失敗" >> "$LOG_FILE"
-        logger -t strict-watchdog "FATAL: 網卡重啟失敗 ($INTERFACE)"
-    fi
+    # 調用新的安全重啟函數
+    restart_network_safely
 fi
 EOF
 
@@ -218,13 +242,12 @@ echo -e "${YELLOW}> 正在配置 Crontab 定時任務...${PLAIN}"
 echo -e "${GREEN}> 定時任務已添加 (頻率: 每10分鐘)。${PLAIN}"
 echo -e ""
 echo -e "${BLUE}=============================================================${PLAIN}"
-echo -e "${GREEN}              安裝成功 (v2.5 Ultimate)                      ${PLAIN}"
+echo -e "${GREEN}              安裝成功 (v2.6 Safe Mode)                     ${PLAIN}"
 echo -e "${BLUE}=============================================================${PLAIN}"
-echo -e "優化摘要:"
-echo -e "  ✅ 延遲解析: 修復 grep 取值 BUG，使用 sed 匹配 'min/avg/max' 結構"
-echo -e "  ✅ 日誌容錯: 權限不足自動切換至 /tmp，保證日誌不丟失"
-echo -e "  ✅ 丟包解析: AWK 智能遍歷，精準識別百分比字段"
-echo -e "  ✅ 系統集成: 關鍵錯誤記錄到 syslog 便於監控"
+echo -e "安全升級說明:"
+echo -e "  ✅ ${YELLOW}服務級重啟${PLAIN}: 優先使用 systemctl restart networking/network"
+echo -e "  ✅ ${YELLOW}DHCP 保活${PLAIN}: 確保重啟後自動獲取 IP，防止 SSH 失聯"
+echo -e "  ✅ ${YELLOW}兼容性增強${PLAIN}: 支持 NetworkManager, Debian/CentOS, OpenRC"
 echo -e ""
 echo -e "測試命令: ${GREEN}bash $INSTALL_PATH${PLAIN}"
 echo -e "日誌查看: ${GREEN}tail -f $LOG_FILE${PLAIN}"
