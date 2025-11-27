@@ -11,13 +11,11 @@ curl -sSL https://raw.githubusercontent.com/thenogodcom/ICM/main/install-watchdo
 ```
 
 首次執行會自動安裝腳本至 `/etc/strict-watchdog.conf` 並進入主選單。
-之後僅需執行：
+手動腳本執行：
 
 ```bash
 bash /root/strict-watchdog.sh
 ```
-
-即可隨時啟動管理介面。
 
 編輯延遲觸發條件，默認500ms
 
