@@ -28,3 +28,9 @@ nano /etc/strict-watchdog.conf
 ```bash
 cat /var/log/strict-watchdog/watchdog.log
 ```
+
+查看腳本執行記錄
+
+```bash
+journalctl | grep strict-watchdog
+```
